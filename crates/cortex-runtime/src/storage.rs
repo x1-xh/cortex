@@ -9,7 +9,9 @@ pub use cortex_core::SecretRedactor;
 use cortex_core::{AgentId, CortexError, EventRecord, JobId, Redactor, Result, RunId};
 use std::str::FromStr;
 
-use crate::scheduler::{JobRunRecord, JobRunStatus, JobStatus, OverlapPolicy, ScheduledJob};
+use crate::scheduler::{
+    CronJobStats, JobRunRecord, JobRunStatus, JobStatus, OverlapPolicy, ScheduledJob,
+};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -1255,6 +1257,165 @@ impl RunStore {
         }
 
         Ok(list)
+    }
+
+    /// Retrieve execution run statistics (total, success, failure) for a scheduled cron job.
+    pub fn get_cron_job_stats(&self, job_id: &JobId) -> Result<CronJobStats> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CortexError::Internal("failed to acquire store lock".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0)
+                FROM cron_job_runs
+                WHERE job_id = ?1
+                "#,
+            )
+            .map_err(map_sql_err)?;
+
+        let stats = stmt
+            .query_row(params![job_id.as_str()], |row| {
+                let total: i64 = row.get(0)?;
+                let success: i64 = row.get(1)?;
+                let failure: i64 = row.get(2)?;
+                Ok(CronJobStats {
+                    total_runs: total as usize,
+                    success_runs: success as usize,
+                    failure_runs: failure as usize,
+                })
+            })
+            .map_err(map_sql_err)?;
+
+        Ok(stats)
+    }
+
+    /// Find a scheduled cron job by exact ID or unique prefix.
+    ///
+    /// Returns `Ok(Some(job))` on exact match or unambiguous prefix match.
+    /// Returns `Ok(None)` if no jobs match.
+    /// Returns `Err(CortexError::Validation(...))` if the prefix matches multiple jobs.
+    pub fn find_cron_job(&self, id_or_prefix: &str) -> Result<Option<ScheduledJob>> {
+        let query = id_or_prefix.trim();
+        if query.is_empty() {
+            return Ok(None);
+        }
+
+        // Try exact match first
+        let exact_id = JobId::from(query);
+        if let Some(job) = self.get_cron_job(&exact_id)? {
+            return Ok(Some(job));
+        }
+
+        // Search by prefix
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CortexError::Internal("failed to acquire store lock".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, name, schedule, prompt, overlap_policy, status,
+                       next_run_at, last_run_at, created_at, updated_at
+                FROM cron_jobs
+                WHERE id LIKE ?1 || '%'
+                ORDER BY created_at ASC
+                "#,
+            )
+            .map_err(map_sql_err)?;
+
+        let rows = stmt
+            .query_map(params![query], |row| {
+                let id_str: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let schedule: String = row.get(2)?;
+                let prompt: String = row.get(3)?;
+                let overlap_policy_str: String = row.get(4)?;
+                let status_str: String = row.get(5)?;
+                let next_run_str: Option<String> = row.get(6)?;
+                let last_run_str: Option<String> = row.get(7)?;
+                let created_str: String = row.get(8)?;
+                let updated_str: String = row.get(9)?;
+
+                Ok((
+                    id_str,
+                    name,
+                    schedule,
+                    prompt,
+                    overlap_policy_str,
+                    status_str,
+                    next_run_str,
+                    last_run_str,
+                    created_str,
+                    updated_str,
+                ))
+            })
+            .map_err(map_sql_err)?;
+
+        let mut matches = Vec::new();
+        for r in rows {
+            let (
+                id_str,
+                name,
+                schedule,
+                prompt,
+                overlap_policy_str,
+                status_str,
+                next_run_str,
+                last_run_str,
+                created_str,
+                updated_str,
+            ) = r.map_err(map_sql_err)?;
+
+            let overlap_policy =
+                OverlapPolicy::from_str(&overlap_policy_str).unwrap_or(OverlapPolicy::Skip);
+            let status = JobStatus::from_str(&status_str).unwrap_or(JobStatus::Active);
+
+            let next_run_at = next_run_str
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let last_run_at = last_run_str
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let created_at = DateTime::parse_from_rfc3339(&created_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            let updated_at = DateTime::parse_from_rfc3339(&updated_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            matches.push(ScheduledJob {
+                id: JobId::from(id_str),
+                name,
+                schedule,
+                prompt,
+                overlap_policy,
+                status,
+                next_run_at,
+                last_run_at,
+                created_at,
+                updated_at,
+            });
+        }
+
+        if matches.is_empty() {
+            Ok(None)
+        } else if matches.len() == 1 {
+            Ok(Some(matches.remove(0)))
+        } else {
+            let ids: Vec<String> = matches.iter().map(|j| j.id.as_str().to_string()).collect();
+            Err(CortexError::Validation(format!(
+                "ambiguous cron job prefix '{}': matches multiple jobs ({})",
+                query,
+                ids.join(", ")
+            )))
+        }
     }
 
     /// Persist an inter-agent message transmission in SQLite with secret redaction.

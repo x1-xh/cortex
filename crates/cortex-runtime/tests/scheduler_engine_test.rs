@@ -258,3 +258,60 @@ fn test_time_until_next_job_and_tick() {
     assert_eq!(updated_job.status, JobStatus::Completed);
     assert_eq!(updated_job.next_run_at, None);
 }
+
+#[test]
+fn test_find_job_prefix_and_stats() {
+    let store = Arc::new(RunStore::in_memory().unwrap());
+    let engine = SchedulerEngine::new(store);
+
+    let job = engine
+        .register_job("Prefix Job", "0 12 * * *", "Prompt", OverlapPolicy::Skip)
+        .unwrap();
+
+    let job_id_str = job.id.as_str();
+    let prefix = &job_id_str[..job_id_str.len().min(8)];
+
+    // Exact lookup
+    let found_exact = engine.find_job(job_id_str).unwrap().unwrap();
+    assert_eq!(found_exact.id, job.id);
+
+    // Prefix lookup
+    let found_prefix = engine.find_job(prefix).unwrap().unwrap();
+    assert_eq!(found_prefix.id, job.id);
+
+    // Nonexistent lookup
+    assert_eq!(engine.find_job("nonexistent").unwrap(), None);
+
+    // Empty stats initially
+    let stats = engine.get_job_stats(&job.id).unwrap();
+    assert_eq!(stats.total_runs, 0);
+    assert_eq!(stats.success_runs, 0);
+    assert_eq!(stats.failure_runs, 0);
+
+    // Add runs: 1 completed, 1 failed
+    let now = Utc::now();
+    let res1 = engine.trigger_job(&job.id, now).unwrap();
+    if let TriggerResult::Started { run_id, .. } = res1 {
+        engine
+            .finish_job_run(&run_id, &job.id, JobRunStatus::Completed, None, None)
+            .unwrap();
+    }
+
+    let res2 = engine.trigger_job(&job.id, now).unwrap();
+    if let TriggerResult::Started { run_id, .. } = res2 {
+        engine
+            .finish_job_run(
+                &run_id,
+                &job.id,
+                JobRunStatus::Failed,
+                None,
+                Some("Error message".into()),
+            )
+            .unwrap();
+    }
+
+    let updated_stats = engine.get_job_stats(&job.id).unwrap();
+    assert_eq!(updated_stats.total_runs, 2);
+    assert_eq!(updated_stats.success_runs, 1);
+    assert_eq!(updated_stats.failure_runs, 1);
+}

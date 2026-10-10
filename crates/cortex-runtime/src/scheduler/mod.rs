@@ -209,6 +209,17 @@ pub struct JobRunRecord {
     pub error: Option<String>,
 }
 
+/// Execution statistics for a scheduled cron job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CronJobStats {
+    /// Total number of recorded execution attempts.
+    pub total_runs: usize,
+    /// Number of runs completed successfully.
+    pub success_runs: usize,
+    /// Number of runs that failed with an error.
+    pub failure_runs: usize,
+}
+
 /// Outcome of triggering a scheduled job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerResult {
@@ -551,6 +562,16 @@ impl SchedulerEngine {
     /// Retrieve recorded run executions for a scheduled job.
     pub fn list_job_runs(&self, job_id: &JobId, limit: usize) -> Result<Vec<JobRunRecord>> {
         self.store.list_cron_job_runs(job_id, limit)
+    }
+
+    /// Find a registered scheduled job by identifier or unique prefix.
+    pub fn find_job(&self, id_or_prefix: &str) -> Result<Option<ScheduledJob>> {
+        self.store.find_cron_job(id_or_prefix)
+    }
+
+    /// Retrieve execution statistics (total, success, failure) for a scheduled job.
+    pub fn get_job_stats(&self, job_id: &JobId) -> Result<CronJobStats> {
+        self.store.get_cron_job_stats(job_id)
     }
 }
 

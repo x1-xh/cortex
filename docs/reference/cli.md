@@ -20,6 +20,12 @@ cortex agent pause <id>
 cortex agent stop <id>
 cortex agent inspect <id> [--json]
 
+cortex cron list [--json] [--db <path>]
+cortex cron create --schedule "<expr>" --prompt "<prompt>" [--name <name>] [--overlap <policy>] [--db <path>]
+cortex cron inspect <id> [--json] [--db <path>]
+cortex cron history <id> [--limit <N>] [--json] [--db <path>]
+cortex cron delete <id> [--db <path>]
+
 cortex [--db <path>]
 ```
 
@@ -174,6 +180,42 @@ cortex agent inspect <agent-id> --json
 | `pause` | Pause a running agent | `<agent-id>` |
 | `stop` | Stop a running or paused agent | `<agent-id>` |
 | `inspect` | Inspect detailed configuration and state | `<agent-id>`, `--json` (optional) |
+
+---
+
+## `cortex cron`
+
+Manage persistent background scheduled cron jobs and one-shot execution timers.
+
+```bash
+# List all registered scheduled jobs
+cortex cron list
+cortex cron list --json
+
+# Create and register a scheduled cron job
+cortex cron create --name "Nightly Backup" --schedule "0 2 * * *" --prompt "Backup workspace databases" --overlap queue
+
+# Inspect job details, configuration, and execution statistics
+cortex cron inspect <job-id>
+cortex cron inspect <job-id> --json
+
+# View chronological execution history and failure summaries
+cortex cron history <job-id>
+cortex cron history <job-id> --limit 10 --json
+
+# Delete a registered scheduled job
+cortex cron delete <job-id>
+```
+
+### Subcommands
+
+| Subcommand | Description | Arguments / Flags |
+|---|---|---|
+| `list` | List all registered scheduled jobs | `--json`, `--db <path>` |
+| `create` | Register a new scheduled cron job | `-s, --schedule <expr>`, `-p, --prompt <text>`, `-n, --name <name>`, `-o, --overlap <policy>`, `--db <path>` |
+| `inspect` | Inspect job details and run statistics | `<job-id>`, `--json`, `--db <path>` |
+| `history` | View chronological execution history | `<job-id>`, `-l, --limit <N>`, `--json`, `--db <path>` |
+| `delete` | Delete a scheduled cron job | `<job-id>`, `--db <path>` |
 
 ---
 

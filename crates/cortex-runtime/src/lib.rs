@@ -43,7 +43,7 @@ pub use sandbox::{
     SandboxExecutionResult, SandboxMode,
 };
 pub use scheduler::{
-    CronExpression, CronField, CronParseError, JobRunRecord, JobRunStatus, JobStatus,
+    CronExpression, CronField, CronJobStats, CronParseError, JobRunRecord, JobRunStatus, JobStatus,
     OverlapPolicy, Schedule, ScheduledJob, SchedulerEngine, TriggerResult,
 };
 pub use storage::{AgentCheckpointRecord, AgentRecord, RunStore, RunSummary, SecretRedactor};

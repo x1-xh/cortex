@@ -4,7 +4,7 @@
 //! including execution run inspection and tracing queries.
 
 use clap::{Parser, Subcommand};
-use cortex_core::{AgentId, CortexError, JobId, RunId, VERSION};
+use cortex_core::{AgentId, CortexError, RunId, VERSION};
 use cortex_runtime::{
     create_model_provider, scheduler::OverlapPolicy, tools, AgentContext, AgentLoop, AgentManager,
     AgentManifest, AgentMessagePayload, AgentState, CortexConfig, McpManager, RunStore, RunSummary,
@@ -404,6 +404,38 @@ enum CronCommands {
     Delete {
         /// Identifier of the job to delete.
         id: String,
+
+        /// Optional path to SQLite database. Defaults to ~/.cortex/cortex.db.
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+
+    /// Inspect details and execution statistics for a scheduled cron job.
+    Inspect {
+        /// Identifier or unique prefix of the job to inspect.
+        id: String,
+
+        /// Output inspection details in JSON format.
+        #[arg(long)]
+        json: bool,
+
+        /// Optional path to SQLite database. Defaults to ~/.cortex/cortex.db.
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+
+    /// View chronological execution history for a scheduled cron job.
+    History {
+        /// Identifier or unique prefix of the job to inspect.
+        id: String,
+
+        /// Maximum number of execution records to display.
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Output execution history in JSON format.
+        #[arg(long)]
+        json: bool,
 
         /// Optional path to SQLite database. Defaults to ~/.cortex/cortex.db.
         #[arg(long)]
@@ -912,15 +944,149 @@ fn handle_cron_delete(
     engine: &SchedulerEngine,
     id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let job_id = JobId::from(id);
-    let deleted = engine.delete_job(&job_id)?;
+    let job = match engine.find_job(id) {
+        Ok(Some(j)) => j,
+        Ok(None) => {
+            eprintln!("Error: Cron job '{}' not found.", id);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let deleted = engine.delete_job(&job.id)?;
     if deleted {
-        println!("Deleted cron job '{}'.", id);
+        println!("Deleted cron job '{}'.", job.id);
         Ok(())
     } else {
         eprintln!("Error: Cron job '{}' not found.", id);
         std::process::exit(1);
     }
+}
+
+fn handle_cron_inspect(
+    engine: &SchedulerEngine,
+    id_or_prefix: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let job = match engine.find_job(id_or_prefix) {
+        Ok(Some(j)) => j,
+        Ok(None) => {
+            eprintln!("Error: Cron job '{}' not found.", id_or_prefix);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let stats = engine.get_job_stats(&job.id)?;
+    let target_agent = "default";
+
+    if json {
+        let val = serde_json::json!({
+            "id": job.id.as_str(),
+            "name": job.name,
+            "schedule": job.schedule,
+            "prompt": job.prompt,
+            "overlap_policy": job.overlap_policy.as_str(),
+            "target_agent": target_agent,
+            "status": job.status.as_str(),
+            "next_run_at": job.next_run_at.map(|dt| dt.to_rfc3339()),
+            "last_run_at": job.last_run_at.map(|dt| dt.to_rfc3339()),
+            "created_at": job.created_at.to_rfc3339(),
+            "updated_at": job.updated_at.to_rfc3339(),
+            "total_runs": stats.total_runs,
+            "success_runs": stats.success_runs,
+            "failure_runs": stats.failure_runs,
+        });
+        println!("{}", serde_json::to_string_pretty(&val)?);
+        return Ok(());
+    }
+
+    let next_str = job
+        .next_run_at
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| "-".to_string());
+    let last_str = job
+        .last_run_at
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| "-".to_string());
+
+    println!("Job ID:       {}", job.id);
+    println!("Name:         {}", job.name);
+    println!("Schedule:     {}", job.schedule);
+    println!("Overlap:      {}", job.overlap_policy);
+    println!("Target Agent: {}", target_agent);
+    println!("Status:       {}", job.status);
+    println!("Next Run:     {}", next_str);
+    println!("Last Run:     {}", last_str);
+    println!("Total Runs:   {}", stats.total_runs);
+    println!("Successes:    {}", stats.success_runs);
+    println!("Failures:     {}", stats.failure_runs);
+    println!("Prompt:       {}", job.prompt);
+
+    Ok(())
+}
+
+fn handle_cron_history(
+    engine: &SchedulerEngine,
+    id_or_prefix: &str,
+    limit: usize,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let job = match engine.find_job(id_or_prefix) {
+        Ok(Some(j)) => j,
+        Ok(None) => {
+            eprintln!("Error: Cron job '{}' not found.", id_or_prefix);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let runs = engine.list_job_runs(&job.id, limit)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&runs)?);
+        return Ok(());
+    }
+
+    if runs.is_empty() {
+        println!("No execution history found for cron job '{}'.", job.id);
+        return Ok(());
+    }
+
+    println!(
+        "{:<28} {:<24} {:<10} {:<12} ERROR SUMMARY",
+        "RUN ID", "TRIGGER TIME", "DURATION", "STATUS"
+    );
+    println!("{:-<95}", "");
+
+    for run in runs {
+        let trigger_str = run.started_at.to_rfc3339();
+        let dur_str = run
+            .duration_ms
+            .map(|d| format!("{}ms", d))
+            .unwrap_or_else(|| "-".to_string());
+        let err_str = run.error.as_deref().unwrap_or("-");
+
+        println!(
+            "{:<28} {:<24} {:<10} {:<12} {}",
+            run.id,
+            trigger_str,
+            dur_str,
+            run.status.as_str(),
+            err_str,
+        );
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1560,6 +1726,41 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            CronCommands::Inspect { id, json, db } => {
+                let db_path = db.unwrap_or_else(default_db_path);
+                let store = Arc::new(match RunStore::open(&db_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error opening database: {}", e);
+                        std::process::exit(1);
+                    }
+                });
+                let engine = SchedulerEngine::new(store);
+                if let Err(e) = handle_cron_inspect(&engine, &id, json) {
+                    eprintln!("Error inspecting cron job: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            CronCommands::History {
+                id,
+                limit,
+                json,
+                db,
+            } => {
+                let db_path = db.unwrap_or_else(default_db_path);
+                let store = Arc::new(match RunStore::open(&db_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error opening database: {}", e);
+                        std::process::exit(1);
+                    }
+                });
+                let engine = SchedulerEngine::new(store);
+                if let Err(e) = handle_cron_history(&engine, &id, limit, json) {
+                    eprintln!("Error retrieving cron job history: {}", e);
+                    std::process::exit(1);
+                }
+            }
         },
         Some(Commands::Workflow { action }) => match action {
             WorkflowCommands::Run {
@@ -2192,6 +2393,42 @@ mod tests {
                 action: CronCommands::Delete { id, .. },
             }) => {
                 assert_eq!(id, "job_12345");
+            }
+            _ => panic!("unexpected command parsed"),
+        }
+
+        let args_inspect = vec!["cortex", "cron", "inspect", "job_12345", "--json"];
+        let parsed_inspect = Cli::try_parse_from(args_inspect).unwrap();
+        match parsed_inspect.command {
+            Some(Commands::Cron {
+                action: CronCommands::Inspect { id, json, .. },
+            }) => {
+                assert_eq!(id, "job_12345");
+                assert!(json);
+            }
+            _ => panic!("unexpected command parsed"),
+        }
+
+        let args_history = vec![
+            "cortex",
+            "cron",
+            "history",
+            "job_12345",
+            "--limit",
+            "15",
+            "--json",
+        ];
+        let parsed_history = Cli::try_parse_from(args_history).unwrap();
+        match parsed_history.command {
+            Some(Commands::Cron {
+                action:
+                    CronCommands::History {
+                        id, limit, json, ..
+                    },
+            }) => {
+                assert_eq!(id, "job_12345");
+                assert_eq!(limit, 15);
+                assert!(json);
             }
             _ => panic!("unexpected command parsed"),
         }
