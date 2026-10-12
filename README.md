@@ -16,10 +16,6 @@
   <img src="assets/cortex-demo.gif" alt="Cortex Terminal Interface Demo" width="850">
 </p>
 
-<p align="center">
-  <img src="assets/cortex-tui.png" alt="Cortex Terminal Interface" width="850">
-</p>
-
 Cortex is a terminal-native AI coding assistant and agent harness built in Rust. It runs in your terminal to inspect repositories, edit code, execute shell commands, fix errors, and run tests directly inside your workspace.
 
 Works offline with **Google Gemma 4** (`gemma4:12b`, `codegemma`) via Ollama with zero API keys, or connects to Google AI Studio, Anthropic Claude, and OpenAI.

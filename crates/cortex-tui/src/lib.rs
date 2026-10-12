@@ -52,6 +52,10 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<(
         .map_err(|e| cortex_core::CortexError::Internal(format!("terminal draw error: {}", e)))?;
 
     loop {
+        if app.should_quit {
+            break;
+        }
+
         let chat_updated = app.poll_chat_updates();
 
         // Responsive polling timeout: 16ms (~60 FPS) when chat agent is running to stream tokens/animations smoothly,
