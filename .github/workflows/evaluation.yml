@@ -25,7 +25,7 @@ jobs:
       - name: Run multi-agent benchmark suite
         run: cargo run -p cortex-cli --bin cortex -- bench run --suite multi-agent --report eval-multi-agent.md
       - name: Upload evaluation reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: benchmark-evaluation-reports
