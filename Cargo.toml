@@ -32,7 +32,7 @@ serde_yaml = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.10"
-ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
 ureq = { version = "2.10", default-features = false, features = ["json", "tls"] }
 toml = "0.8"
