@@ -10,7 +10,6 @@ feature-depth = 1
 [advisories]
 ignore = [
     "RUSTSEC-2024-0436", # unmaintained advisory for paste dependency in ratatui
-    "RUSTSEC-2024-0320", # unmaintained advisory for serde_yaml
 ]
 
 [licenses]
